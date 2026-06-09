@@ -1,0 +1,162 @@
+#!/usr/bin/env bash
+# rpm2eif - Build a sidecar EIF from RPMs with dm-verity integrity.
+#
+# Produces:
+#   - {name}.eif: minimal EIF (kernel + cmdline + empty ramdisk + metadata)
+#   - {name}-disk.img: GPT disk with ROOT-A (erofs) + HASH-A (verity) partitions
+#   - {name}-kernel: bare vmlinuz for direct Firecracker boot
+
+set -euo pipefail
+shopt -qs failglob
+
+# Source imghelper for generate_verity_root and related functions
+. "${0%/*}/imghelper"
+
+usage() {
+    cat <<EOF
+Usage: $0 --package-dir=DIR --output-dir=DIR [OPTIONS]
+
+Required:
+    --package-dir=DIR       Directory containing RPMs to install
+    --output-dir=DIR        Output directory for artifacts
+
+Optional:
+    --sbom-package-dir=DIR  Directory containing SBOM RPMs
+EOF
+    exit 1
+}
+
+PACKAGE_DIR=""
+SBOM_PACKAGE_DIR=""
+OUTPUT_DIR=""
+
+for arg in "$@"; do
+    case "${arg}" in
+        --package-dir=*) PACKAGE_DIR="${arg#*=}" ;;
+        --sbom-package-dir=*) SBOM_PACKAGE_DIR="${arg#*=}" ;;
+        --output-dir=*) OUTPUT_DIR="${arg#*=}" ;;
+        *) echo "Unknown argument: ${arg}"; usage ;;
+    esac
+done
+
+if [[ -z "${PACKAGE_DIR}" || -z "${OUTPUT_DIR}" ]]; then
+    usage
+fi
+
+# Store output artifacts in a versioned directory.
+OUTPUT_DIR="${OUTPUT_DIR}/${VERSION_ID}-${BUILD_ID}"
+mkdir -p "${OUTPUT_DIR}"
+
+INSTALL_ROOT="$(mktemp -d)"
+trap 'rm -rf "${INSTALL_ROOT}" "${KERNEL_LOCAL:-}" "${ROOTFS_TMP:-}" "${VERITY_TMP:-}" "${DISK_TMP:-}" "${EIF_TMP:-}"' EXIT
+
+echo "=== Installing RPMs ==="
+rpm -iv --ignorearch --root "${INSTALL_ROOT}" \
+    "${PACKAGE_DIR}"/*.rpm
+
+if [[ -n "${SBOM_PACKAGE_DIR}" ]] && ls "${SBOM_PACKAGE_DIR}"/*.rpm &>/dev/null; then
+    rpm -iv --ignorearch --root "${INSTALL_ROOT}" \
+        "${SBOM_PACKAGE_DIR}"/*.rpm
+fi
+
+echo "=== Extracting kernel ==="
+KERNEL="$(find "${INSTALL_ROOT}" -name 'vmlinuz' | head -1)"
+if [[ -z "${KERNEL}" ]]; then
+    echo "ERROR: No vmlinuz found in ${INSTALL_ROOT}"
+    exit 1
+fi
+echo "Kernel: ${KERNEL}"
+
+VMLINUX="$(find "${INSTALL_ROOT}" -name 'vmlinux' | head -1)"
+if [[ -n "${VMLINUX}" ]]; then
+    cp "${VMLINUX}" "${OUTPUT_DIR}/vmlinux"
+fi
+
+# Copy kernel to local temp before removing /boot from rootfs
+KERNEL_LOCAL="$(mktemp)"
+cp "${KERNEL}" "${KERNEL_LOCAL}"
+
+echo "=== Creating rootfs.erofs ==="
+# Remove /boot from rootfs (kernel is separate)
+find "${INSTALL_ROOT}" -path '*/boot' -type d -exec rm -rf {} +
+ROOTFS_TMP="$(mktemp)"
+mkfs.erofs "${ROOTFS_TMP}" "${INSTALL_ROOT}"
+
+echo "=== Generating dm-verity hash tree ==="
+# Calculate verity partition size: ~1/127th of data + margin, round up to MiB
+ROOTFS_SIZE="$(stat -c %s "${ROOTFS_TMP}")"
+ROOTFS_MIB="$(( (ROOTFS_SIZE + 1048575) / 1048576 ))"
+# Verity overhead is ~1/127 of data; add 1 MiB margin
+VERITY_MIB="$(( (ROOTFS_MIB / 127) + 2 ))"
+
+VERITY_TMP="$(mktemp)"
+declare -a DM_VERITY_ROOT
+generate_verity_root "${ROOTFS_TMP}" "${VERITY_TMP}" "${VERITY_MIB}" DM_VERITY_ROOT
+
+# Extract verity parameters from DM_VERITY_ROOT array
+# Format: root,,,ro,0 <sectors> verity <version> <data_dev> <hash_dev> <data_bs> <hash_bs> <blocks> 1 <algo> <root_hash> <salt> 2 restart_on_corruption ignore_zero_blocks
+VERITY_DATA_SECTORS="${DM_VERITY_ROOT[1]}"
+VERITY_DATA_BLOCKS="${DM_VERITY_ROOT[8]}"
+VERITY_ROOT_HASH="${DM_VERITY_ROOT[11]}"
+VERITY_SALT="${DM_VERITY_ROOT[12]}"
+
+echo "=== Creating GPT disk image ==="
+# Partition layout: 1MiB GPT gap, ROOT-A, HASH-A
+GPT_GAP_MIB=1
+ROOT_OFF_MIB="${GPT_GAP_MIB}"
+ROOT_SIZE_MIB="${ROOTFS_MIB}"
+HASH_OFF_MIB="$(( ROOT_OFF_MIB + ROOT_SIZE_MIB ))"
+HASH_SIZE_MIB="${VERITY_MIB}"
+DISK_SIZE_MIB="$(( HASH_OFF_MIB + HASH_SIZE_MIB + 1 ))"  # +1 for GPT backup
+
+# Partition type GUIDs (x86_64)
+ROOT_TYPE_GUID="5526016a-1a97-4ea4-b39a-b7c8c6ca4502"
+HASH_TYPE_GUID="598f10af-c955-4456-6a99-7720068a6cea"
+
+DISK_TMP="$(mktemp)"
+truncate -s "${DISK_SIZE_MIB}M" "${DISK_TMP}"
+
+# Create partitions (sectors = MiB * 2048)
+ROOT_START="$(( ROOT_OFF_MIB * 2048 ))"
+ROOT_END="$(( (ROOT_OFF_MIB + ROOT_SIZE_MIB) * 2048 - 1 ))"
+HASH_START="$(( HASH_OFF_MIB * 2048 ))"
+HASH_END="$(( (HASH_OFF_MIB + HASH_SIZE_MIB) * 2048 - 1 ))"
+
+sgdisk \
+    --new=1:${ROOT_START}:${ROOT_END} --typecode=1:${ROOT_TYPE_GUID} --change-name=1:ROOT-A \
+    --new=2:${HASH_START}:${HASH_END} --typecode=2:${HASH_TYPE_GUID} --change-name=2:HASH-A \
+    "${DISK_TMP}"
+
+# Write rootfs and verity data to partitions
+dd if="${ROOTFS_TMP}" of="${DISK_TMP}" conv=notrunc bs=1M seek="${ROOT_OFF_MIB}"
+dd if="${VERITY_TMP}" of="${DISK_TMP}" conv=notrunc bs=1M seek="${HASH_OFF_MIB}"
+
+sgdisk -v "${DISK_TMP}"
+
+echo "=== Building EIF with dm-verity cmdline ==="
+# Build dm-verity kernel cmdline with /dev/vda1 and /dev/vda2
+DM_CREATE="dm-mod.create=\"root,,,ro,0 ${VERITY_DATA_SECTORS} verity 1 /dev/vda1 /dev/vda2 4096 4096 ${VERITY_DATA_BLOCKS} 1 sha256 ${VERITY_ROOT_HASH} ${VERITY_SALT} 2 restart_on_corruption ignore_zero_blocks\""
+KERNEL_CMDLINE="root=/dev/dm-0 ro rootwait console=ttyS0 initcall_blacklist=i8042_init ${DM_CREATE}"
+
+EIF_TMP="$(mktemp)"
+/host/build/tools/eif-builder \
+    --kernel "${KERNEL_LOCAL}" \
+    --cmdline "${KERNEL_CMDLINE}" \
+    --output "${EIF_TMP}"
+
+echo "=== Copying artifacts to output ==="
+ARTIFACT_PREFIX="${IMAGE_NAME}-${VARIANT_NAME}-${ARCH}-${VERSION_ID}-${BUILD_ID}"
+cp "${KERNEL_LOCAL}" "${OUTPUT_DIR}/${ARTIFACT_PREFIX}-kernel"
+cp "${EIF_TMP}" "${OUTPUT_DIR}/${ARTIFACT_PREFIX}.eif"
+cp "${DISK_TMP}" "${OUTPUT_DIR}/${ARTIFACT_PREFIX}-disk.img"
+
+# Create symlinks
+ln -snf "${ARTIFACT_PREFIX}.eif" "${OUTPUT_DIR}/latest.eif"
+ln -snf "${ARTIFACT_PREFIX}-disk.img" "${OUTPUT_DIR}/latest-disk.img"
+ln -snf "${ARTIFACT_PREFIX}-kernel" "${OUTPUT_DIR}/latest-kernel"
+if [[ -n "${VMLINUX}" ]]; then
+    ln -snf "vmlinux" "${OUTPUT_DIR}/latest-vmlinux"
+fi
+
+echo "=== Build complete ==="
+ls -lh "${OUTPUT_DIR}/"

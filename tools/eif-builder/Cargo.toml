@@ -1,0 +1,10 @@
+[package]
+name = "eif-builder"
+version = "0.2.0"
+edition = "2021"
+license = "Apache-2.0 OR MIT"
+publish = false
+
+[dependencies]
+crc32fast = "1"
+clap = { version = "4", features = ["derive"] }
