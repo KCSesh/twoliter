@@ -721,6 +721,7 @@ pub struct BuildVariant {
 #[derive(Deserialize, Debug, Clone)]
 #[serde(rename_all = "lowercase")]
 pub enum ImageFormat {
+    Eif,
     Qcow2,
     Raw,
     Vmdk,

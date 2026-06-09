@@ -492,6 +492,7 @@ impl DockerBuild {
                 data_image_size_gib: data_image_size_gib.to_string(),
                 image_features: manifest.info().image_features().unwrap_or_default(),
                 image_format: match manifest.info().image_format() {
+                    Some(ImageFormat::Eif) => "eif",
                     Some(ImageFormat::Raw) | None => "raw",
                     Some(ImageFormat::Qcow2) => "qcow2",
                     Some(ImageFormat::Vmdk) => "vmdk",
@@ -577,6 +578,7 @@ impl DockerBuild {
                 data_image_size_gib: data_image_size_gib.to_string(),
                 image_features: manifest.info().image_features().unwrap_or_default(),
                 image_format: match manifest.info().image_format() {
+                    Some(ImageFormat::Eif) => "eif",
                     Some(ImageFormat::Raw) | None => "raw",
                     Some(ImageFormat::Qcow2) => "qcow2",
                     Some(ImageFormat::Vmdk) => "vmdk",

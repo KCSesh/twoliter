@@ -23,9 +23,20 @@ members = [
     "tools/unplug",
     "tools/update-metadata",
     "tools/advisory-checker",
+    "tools/eif-builder",
 
     "twoliter",
-    "twoliter/src/tool-crates/*",
+    "twoliter/src/tool-crates/advisory-checker",
+    "twoliter/src/tool-crates/buildsys",
+    "twoliter/src/tool-crates/embedded-bundle",
+    "twoliter/src/tool-crates/pcrsys",
+    "twoliter/src/tool-crates/pipesys",
+    "twoliter/src/tool-crates/pubsys",
+    "twoliter/src/tool-crates/pubsys-setup",
+    "twoliter/src/tool-crates/testsys",
+    "twoliter/src/tool-crates/tuftool",
+    "twoliter/src/tool-crates/unplug",
+    "twoliter/src/tool-crates/eif-builder",
 
     "tests/integration-tests",
 ]
@@ -72,6 +83,7 @@ parse-datetime = { version = "0.1", path = "tools/parse-datetime" }
 path-absolutize = "3.1"
 pcrsys = { version = "0.1", path = "tools/pcrsys", artifact = [ "bin:pcrsys" ] }
 pipesys = { version = "0.1", path = "tools/pipesys", lib = true, artifact = [ "bin:pipesys" ] }
+eif-builder = { version = "0.2", path = "tools/eif-builder", artifact = [ "bin:eif-builder" ] }
 pubsys = { version = "0.1", path = "tools/pubsys", artifact = [ "bin:pubsys" ] }
 pubsys-config = { version = "0.1", path = "tools/pubsys-config" }
 pubsys-setup = { version = "0.1", path = "tools/pubsys-setup", artifact = [ "bin:pubsys-setup" ] }
@@ -92,6 +104,7 @@ twoliter-tool-pubsys-setup = { version = "0.1", path = "twoliter/src/tool-crates
 twoliter-tool-testsys = { version = "0.1", path = "twoliter/src/tool-crates/testsys" }
 twoliter-tool-tuftool = { version = "0.1", path = "twoliter/src/tool-crates/tuftool" }
 twoliter-tool-unplug = { version = "0.1", path = "twoliter/src/tool-crates/unplug" }
+twoliter-tool-eif-builder = { version = "0.1", path = "twoliter/src/tool-crates/eif-builder" }
 
 unplug = { version = "0.1", path = "tools/unplug", artifact = [ "bin:unplug" ] }
 update-metadata = { version = "0.1", path = "tools/update-metadata" }

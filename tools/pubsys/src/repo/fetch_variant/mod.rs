@@ -144,6 +144,7 @@ async fn fetch_variant(
     let image_ext = match image_format {
         Some(ImageFormat::Raw) | None => "img.lz4",
         Some(ImageFormat::Qcow2) => "qcow2",
+        Some(ImageFormat::Eif) => "eif",
         Some(ImageFormat::Vmdk) => "ova",
     };
 
