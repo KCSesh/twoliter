@@ -1,0 +1,157 @@
+#!/usr/bin/env bash
+# rpm2eif - Build an EIF (Enclave Image Format) image from RPMs.
+#
+# This script installs RPMs into a temporary root, then packages the result
+# into an EIF file suitable for Nitro Enclaves or Nitro Sidecars.
+# Additionally produces Firecracker-compatible artifacts (kernel + rootfs.erofs).
+
+set -euo pipefail
+shopt -qs failglob
+
+usage() {
+    cat <<EOF
+Usage: $0 --package-dir=DIR --output-dir=DIR [OPTIONS]
+
+Required:
+    --package-dir=DIR       Directory containing RPMs to install
+    --output-dir=DIR        Output directory for the EIF file
+
+Optional:
+    --sbom-package-dir=DIR  Directory containing SBOM RPMs
+    --kernel-parameters=STR Kernel command line (default: reboot=k panic=30 pci=off console=hvc0)
+EOF
+    exit 1
+}
+
+PACKAGE_DIR=""
+SBOM_PACKAGE_DIR=""
+OUTPUT_DIR=""
+KERNEL_PARAMETERS="reboot=k panic=30 pci=off nomodules console=ttyS0 i8042.noaux i8042.nomux i8042.nopnp i8042.dumbkbd random.trust_cpu=on"
+
+for arg in "$@"; do
+    case "${arg}" in
+        --package-dir=*) PACKAGE_DIR="${arg#*=}" ;;
+        --sbom-package-dir=*) SBOM_PACKAGE_DIR="${arg#*=}" ;;
+        --output-dir=*) OUTPUT_DIR="${arg#*=}" ;;
+        --kernel-parameters=*) KERNEL_PARAMETERS="${arg#*=}" ;;
+        *) echo "Unknown argument: ${arg}"; usage ;;
+    esac
+done
+
+if [[ -z "${PACKAGE_DIR}" || -z "${OUTPUT_DIR}" ]]; then
+    usage
+fi
+
+# Store output artifacts in a versioned directory.
+OUTPUT_DIR="${OUTPUT_DIR}/${VERSION_ID}-${BUILD_ID}"
+mkdir -p "${OUTPUT_DIR}"
+
+INSTALL_ROOT="$(mktemp -d)"
+trap 'rm -rf "${INSTALL_ROOT}"' EXIT
+
+echo "=== Installing RPMs ==="
+rpm -iv --ignorearch --root "${INSTALL_ROOT}" \
+    "${PACKAGE_DIR}"/*.rpm
+
+if [[ -n "${SBOM_PACKAGE_DIR}" ]] && ls "${SBOM_PACKAGE_DIR}"/*.rpm &>/dev/null; then
+    rpm -iv --ignorearch --root "${INSTALL_ROOT}" \
+        "${SBOM_PACKAGE_DIR}"/*.rpm
+fi
+
+echo "=== Extracting kernels ==="
+KERNEL_COMPRESSED="$(find "${INSTALL_ROOT}" -name 'vmlinuz' | head -1)"
+KERNEL_ELF="$(find "${INSTALL_ROOT}" -name 'vmlinux' | head -1)"
+if [[ -z "${KERNEL_COMPRESSED}" ]]; then
+    echo "ERROR: No vmlinuz found in ${INSTALL_ROOT}"
+    exit 1
+fi
+if [[ -z "${KERNEL_ELF}" ]]; then
+    echo "ERROR: No vmlinux found in ${INSTALL_ROOT} (needed for EIF)"
+    exit 1
+fi
+echo "Kernel (bzImage): ${KERNEL_COMPRESSED}"
+echo "Kernel (ELF): ${KERNEL_ELF}"
+cp "${KERNEL_COMPRESSED}" "${OUTPUT_DIR}/vmlinuz"
+cp "${KERNEL_ELF}" "${OUTPUT_DIR}/vmlinux"
+
+echo "=== Creating bootstrap ramdisk ==="
+BOOTSTRAP_DIR="$(mktemp -d)"
+mkdir -p "${BOOTSTRAP_DIR}/dev"
+
+# Use upstream Nitro Enclaves init (handles NSM, heartbeat, pivot-root)
+cp /host/build/tools/eif-init-x86_64 "${BOOTSTRAP_DIR}/init"
+chmod 0755 "${BOOTSTRAP_DIR}/init"
+# NSM kernel module (required by upstream init for attestation)
+NSM_KO="$(find "${INSTALL_ROOT}" -name 'nsm.ko*' | head -1)"
+if [[ -n "${NSM_KO}" ]]; then
+    cp "${NSM_KO}" "${BOOTSTRAP_DIR}/nsm.ko"
+    echo "NSM module: ${NSM_KO}"
+else
+    echo "WARNING: nsm.ko not found - enclave attestation will not work"
+fi
+
+# Upstream init reads /cmd and /env to determine what to exec after pivot_root
+printf '/usr/sbin/init\0' > "${BOOTSTRAP_DIR}/cmd"
+printf '\0' > "${BOOTSTRAP_DIR}/env"
+
+(cd "${BOOTSTRAP_DIR}" && find . | cpio -o -H newc --quiet) > "${OUTPUT_DIR}/bootstrap.cpio"
+rm -rf "${BOOTSTRAP_DIR}"
+
+echo "=== Creating Firecracker artifacts (kernel + rootfs.erofs) ==="
+# Remove /boot from rootfs (kernel is a separate file for Firecracker)
+find "${INSTALL_ROOT}" -path '*/boot' -type d -exec rm -rf {} +
+# Create EROFS rootfs (includes modules for Firecracker guests)
+mkfs.erofs "${OUTPUT_DIR}/${IMAGE_NAME}-${VARIANT_NAME}-${ARCH}-${VERSION_ID}-${BUILD_ID}-rootfs.erofs" "${INSTALL_ROOT}"
+# Copy kernel as a named artifact
+cp "${OUTPUT_DIR}/vmlinuz" "${OUTPUT_DIR}/${IMAGE_NAME}-${VARIANT_NAME}-${ARCH}-${VERSION_ID}-${BUILD_ID}-kernel"
+
+echo "=== Creating customer ramdisk ==="
+# Remove rpmdb and other unnecessary data
+find "${INSTALL_ROOT}" -path '*/var/lib' -type d -exec rm -rf {} +
+# Remove modules from EIF customer ramdisk (NSM is built-in)
+find "${INSTALL_ROOT}" -path '*/lib/modules' -type d -exec rm -rf {} +
+
+# Upstream init expects customer rootfs under /rootfs/ prefix
+# RPMs install to cross-prefix: ${ARCH}-bottlerocket-linux-gnu/sys-root/
+# Create a clean customer dir with only rootfs/
+CUSTOMER_DIR="$(mktemp -d)"
+SYS_ROOT="${INSTALL_ROOT}/${ARCH}-bottlerocket-linux-gnu/sys-root"
+if [[ -d "${SYS_ROOT}" ]]; then
+    mv "${SYS_ROOT}" "${CUSTOMER_DIR}/rootfs"
+else
+    mkdir -p "${CUSTOMER_DIR}/rootfs"
+    for item in "${INSTALL_ROOT}"/*; do
+        mv "${item}" "${CUSTOMER_DIR}/rootfs/"
+    done
+fi
+
+# Ensure mount points exist for upstream init (mounts devtmpfs, proc, sysfs, etc. after pivot_root)
+mkdir -p "${CUSTOMER_DIR}/rootfs/"{dev,proc,sys,run,tmp,var/run}
+
+# Create merged-usr symlinks (Bottlerocket uses merged-usr layout)
+ln -sf usr/bin "${CUSTOMER_DIR}/rootfs/bin"
+ln -sf usr/sbin "${CUSTOMER_DIR}/rootfs/sbin"
+ln -sf usr/lib "${CUSTOMER_DIR}/rootfs/lib"
+ln -sf usr/lib "${CUSTOMER_DIR}/rootfs/lib64"
+
+(cd "${CUSTOMER_DIR}" && find . | cpio -o -H newc --quiet) > "${OUTPUT_DIR}/customer.cpio"
+rm -rf "${CUSTOMER_DIR}"
+
+echo "=== Assembling EIF ==="
+/host/build/tools/eif-builder \
+    --kernel "${OUTPUT_DIR}/vmlinuz" \
+    --cmdline "${KERNEL_PARAMETERS}" \
+    --ramdisk "${OUTPUT_DIR}/bootstrap.cpio" \
+    --ramdisk "${OUTPUT_DIR}/customer.cpio" \
+    --output "${OUTPUT_DIR}/${IMAGE_NAME}-${VARIANT_NAME}-${ARCH}-${VERSION_ID}-${BUILD_ID}.eif"
+
+# Clean up intermediate files
+rm -f "${OUTPUT_DIR}/bootstrap.cpio" "${OUTPUT_DIR}/customer.cpio" "${OUTPUT_DIR}/vmlinuz" "${OUTPUT_DIR}/vmlinux"
+
+# Create symlinks
+ln -snf "${IMAGE_NAME}-${VARIANT_NAME}-${ARCH}-${VERSION_ID}-${BUILD_ID}.eif" "${OUTPUT_DIR}/latest.eif"
+ln -snf "${IMAGE_NAME}-${VARIANT_NAME}-${ARCH}-${VERSION_ID}-${BUILD_ID}-rootfs.erofs" "${OUTPUT_DIR}/latest-rootfs.erofs"
+ln -snf "${IMAGE_NAME}-${VARIANT_NAME}-${ARCH}-${VERSION_ID}-${BUILD_ID}-kernel" "${OUTPUT_DIR}/latest-kernel"
+
+echo "=== Build complete ==="
+ls -lh "${OUTPUT_DIR}/"
