@@ -391,23 +391,34 @@ RUN --mount=target=/host \
     --mount=type=secret,id=aws-session-token.env,target=/root/.aws/aws-session-token.env \
     /host/build/tools/pipesys link --fd-socket "${BYPASS_SOCKET}" --target /bypass && \
     /host/build/tools/pipesys link --fd-socket "${OUTPUT_SOCKET}" --target /output && \
-    /host/build/tools/rpm2img \
-      --package-dir=/local/rpms \
-      --sbom-package-dir=/local/sbom-rpms \
-      --output-dir=/output \
-      --external-kits-path="/bypass/build/external-kits" \
-      --output-fmt="${IMAGE_FORMAT}" \
-      --os-image-size-gib="${OS_IMAGE_SIZE_GIB}" \
-      --data-image-size-gib="${DATA_IMAGE_SIZE_GIB}" \
-      --os-image-publish-size-gib="${OS_IMAGE_PUBLISH_SIZE_GIB}" \
-      --data-image-publish-size-gib="${DATA_IMAGE_PUBLISH_SIZE_GIB}" \
-      --partition-plan="${PARTITION_PLAN}" \
-      --ovf-template="/bypass/variants/${VARIANT_NAME}/template.ovf" \
-      ${XFS_DATA_PARTITION:+--with-xfs-data-partition=yes} \
-      ${EROFS_ROOT_PARTITION:+--with-erofs-root-partition=yes} \
-      ${UEFI_SECURE_BOOT:+--with-uefi-secure-boot=yes} \
-      ${IN_PLACE_UPDATES:+--with-in-place-updates=yes} \
-      ${ENCRYPTED_STORAGE:+--with-encrypted-storage=yes} && \
+    if [ "${IMAGE_FORMAT}" = "eif" ]; then \
+      # NOTE: EIF variants build a self-contained sidecar EIF plus a GPT disk \
+      # image and bare kernel. The image-layout, partition-plan, secure-boot, \
+      # and similar manifest fields are intentionally NOT forwarded -- rpm2eif \
+      # owns the on-disk layout and ignores them. \
+      /host/build/tools/rpm2eif \
+        --package-dir=/local/rpms \
+        --sbom-package-dir=/local/sbom-rpms \
+        --output-dir=/output ; \
+    else \
+      /host/build/tools/rpm2img \
+        --package-dir=/local/rpms \
+        --sbom-package-dir=/local/sbom-rpms \
+        --output-dir=/output \
+        --external-kits-path="/bypass/build/external-kits" \
+        --output-fmt="${IMAGE_FORMAT}" \
+        --os-image-size-gib="${OS_IMAGE_SIZE_GIB}" \
+        --data-image-size-gib="${DATA_IMAGE_SIZE_GIB}" \
+        --os-image-publish-size-gib="${OS_IMAGE_PUBLISH_SIZE_GIB}" \
+        --data-image-publish-size-gib="${DATA_IMAGE_PUBLISH_SIZE_GIB}" \
+        --partition-plan="${PARTITION_PLAN}" \
+        --ovf-template="/bypass/variants/${VARIANT_NAME}/template.ovf" \
+        ${XFS_DATA_PARTITION:+--with-xfs-data-partition=yes} \
+        ${EROFS_ROOT_PARTITION:+--with-erofs-root-partition=yes} \
+        ${UEFI_SECURE_BOOT:+--with-uefi-secure-boot=yes} \
+        ${IN_PLACE_UPDATES:+--with-in-place-updates=yes} \
+        ${ENCRYPTED_STORAGE:+--with-encrypted-storage=yes} ; \
+    fi && \
     rm -rf /local/rpms && \
     chown -R "${BUILDER_UID}:${BUILDER_UID}" /output/ && \
     rm /output && \

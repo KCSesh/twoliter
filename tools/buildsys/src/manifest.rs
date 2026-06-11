@@ -115,7 +115,8 @@ included-packages = ["release"]
 ```
 
 `image-format` is the desired format for the built images.
-This can be `raw` (the default), `vmdk`, or `qcow2`.
+This can be `raw` (the default), `vmdk`, `qcow2`, or `eif`
+(AWS Nitro Enclaves Image Format).
 ```ignore
 [package.metadata.build-variant]
 image-format = "vmdk"
@@ -721,6 +722,7 @@ pub struct BuildVariant {
 #[derive(Deserialize, Debug, Clone)]
 #[serde(rename_all = "lowercase")]
 pub enum ImageFormat {
+    Eif,
     Qcow2,
     Raw,
     Vmdk,
@@ -1033,5 +1035,31 @@ mod test {
             "extra-3-kit".to_string(),
         ];
         assert_eq!(kit_list, expected);
+    }
+
+    /// Verify that a variant declaring `image-format = "eif"` parses and
+    /// surfaces `ImageFormat::Eif` from `image_format()`.
+    #[test]
+    fn test_image_format_eif_variant_hello_eif() {
+        let manifest_path = cargo_manifest("hello-eif");
+        let temp_dir = TempDir::new().unwrap();
+        let cargo_metadata_path = cargo_metadata_path(&temp_dir);
+        let manifest = Manifest::new(manifest_path, cargo_metadata_path).unwrap();
+        assert!(matches!(
+            manifest.info().image_format(),
+            Some(ImageFormat::Eif)
+        ));
+    }
+
+    /// Sanity check: the existing non-EIF variant has no `image-format` set and
+    /// therefore returns `None`. This guards the default-`raw` path used by
+    /// `builder.rs`.
+    #[test]
+    fn test_image_format_default_variant_hello_ootb() {
+        let manifest_path = cargo_manifest("hello-ootb");
+        let temp_dir = TempDir::new().unwrap();
+        let cargo_metadata_path = cargo_metadata_path(&temp_dir);
+        let manifest = Manifest::new(manifest_path, cargo_metadata_path).unwrap();
+        assert!(manifest.info().image_format().is_none());
     }
 }

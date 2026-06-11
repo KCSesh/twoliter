@@ -492,6 +492,7 @@ impl DockerBuild {
                 data_image_size_gib: data_image_size_gib.to_string(),
                 image_features: manifest.info().image_features().unwrap_or_default(),
                 image_format: match manifest.info().image_format() {
+                    Some(ImageFormat::Eif) => "eif",
                     Some(ImageFormat::Raw) | None => "raw",
                     Some(ImageFormat::Qcow2) => "qcow2",
                     Some(ImageFormat::Vmdk) => "vmdk",
@@ -533,6 +534,13 @@ impl DockerBuild {
 
     /// Create a new `DockerBuild` that can repackage a variant image.
     pub(crate) fn repack_variant(args: RepackVariantArgs, manifest: &Manifest) -> Result<Self> {
+        // Repack is implemented by `img2img`, which has no EIF support. Fail
+        // fast here so users get a clear error instead of a cryptic failure
+        // deep inside the Dockerfile build.
+        if matches!(manifest.info().image_format(), Some(ImageFormat::Eif)) {
+            return error::EifRepackUnsupportedSnafu.fail();
+        }
+
         let image_layout = manifest.info().image_layout().cloned().unwrap_or_default();
         let ImageLayout {
             os_image_size_gib,
@@ -577,6 +585,7 @@ impl DockerBuild {
                 data_image_size_gib: data_image_size_gib.to_string(),
                 image_features: manifest.info().image_features().unwrap_or_default(),
                 image_format: match manifest.info().image_format() {
+                    Some(ImageFormat::Eif) => "eif",
                     Some(ImageFormat::Raw) | None => "raw",
                     Some(ImageFormat::Qcow2) => "qcow2",
                     Some(ImageFormat::Vmdk) => "vmdk",

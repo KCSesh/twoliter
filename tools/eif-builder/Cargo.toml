@@ -1,10 +1,16 @@
 [package]
 name = "eif-builder"
-version = "0.2.0"
+version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0 OR MIT"
 publish = false
 
 [dependencies]
-crc32fast = "1"
-clap = { version = "4", features = ["derive"] }
+crc32fast.workspace = true
+clap = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
