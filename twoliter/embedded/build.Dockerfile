@@ -396,7 +396,12 @@ RUN --mount=target=/host \
         --package-dir=/local/rpms \
         --sbom-package-dir=/local/sbom-rpms \
         --output-dir=/output \
-        --kernel-parameters="${KERNEL_PARAMETERS}" ; \
+        --kernel-parameters="${KERNEL_PARAMETERS}" \
+        --variant="${VARIANT_NAME}" \
+        --pretty-name="${PRETTY_NAME}" \
+        --project-vendor="${PROJECT_VENDOR}" \
+        ${XFS_DATA_PARTITION:+--xfs-data-partition} \
+        ${ENCRYPTED_STORAGE:+--encrypted-storage} ; \
     else \
       /host/build/tools/rpm2img \
         --package-dir=/local/rpms \
