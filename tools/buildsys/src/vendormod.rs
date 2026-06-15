@@ -75,9 +75,7 @@ tar xf "__LOCAL_FILE_NAME__"
 pushd "${targetdir}"
     mkdir -p .cargo
     cargo metadata --locked --format-version 1 >/dev/null && cargo vendor --locked > .cargo/config.toml
-    if [ -f /deny.toml ]; then
-        cargo deny --config /deny.toml check --disable-fetch licenses bans sources
-    fi
+    cargo deny --config /deny.toml check --disable-fetch licenses bans sources
 popd
 
 tar czf "__OUTPUT__" -C "${targetdir}" vendor .cargo/config.toml
@@ -157,6 +155,7 @@ impl VendorMod {
             sdk,
             &root_dir.join(config.cache_dir),
             &format!("./{}", config.script_name),
+            root_dir,
         );
         fs::remove_file(&script_path).context(error::RemoveFileSnafu { path: &script_path })?;
 
@@ -186,7 +185,17 @@ fn run_docker_tool(
     sdk_image: &str,
     cache_dir: &Path,
     command: &str,
+    root_dir: &Path,
 ) -> Result<()> {
+    let deny_config_path = root_dir.join("sources").join("deny.toml");
+    ensure!(
+        deny_config_path.is_file(),
+        error::InputFileBadSnafu {
+            path: &deny_config_path
+        }
+    );
+    let deny_config_str = deny_config_path.to_string_lossy().to_string();
+
     let mut args = vec![
         "--module-path",
         module_path.to_str().context(error::InputFileSnafu)?,
@@ -194,6 +203,8 @@ fn run_docker_tool(
         sdk_image,
         config.cache_arg_name,
         cache_dir.to_str().context(error::InputFileSnafu)?,
+        "--deny-config",
+        &deny_config_str,
     ];
 
     args.push("--command");
