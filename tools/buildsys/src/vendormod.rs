@@ -24,6 +24,7 @@ pub(crate) struct VendorConfig {
     pub script_template: &'static str,
     pub docker_tool: &'static str,
     pub cache_dir: &'static str,
+    pub cache_arg_name: &'static str,
 }
 
 // Go vendoring configuration
@@ -31,22 +32,22 @@ const GO_SCRIPT_TMPL: &str = r#"#!/bin/bash
 
 set -e
 
-toplevel=$(tar tf __LOCAL_FILE_NAME__ | head -1)
-if [ -z __MOD_DIR__ ] ; then
+toplevel=$(tar tf "__LOCAL_FILE_NAME__" | head -1)
+if [ -z "__MOD_DIR__" ] ; then
     targetdir="${toplevel}"
 else
     targetdir="__MOD_DIR__"
 fi
 
-tar xf __LOCAL_FILE_NAME__
+tar xf "__LOCAL_FILE_NAME__"
 
 pushd "${targetdir}"
     go list -mod=readonly ./... >/dev/null && go mod vendor
 popd
 
-tar czf __OUTPUT__ "${targetdir}"/vendor
+tar czf "__OUTPUT__" "${targetdir}"/vendor
 rm -rf "${targetdir}"
-touch -r __LOCAL_FILE_NAME__ __OUTPUT__
+touch -r "__LOCAL_FILE_NAME__" "__OUTPUT__"
 "#;
 
 pub(crate) const GO_CONFIG: VendorConfig = VendorConfig {
@@ -54,6 +55,7 @@ pub(crate) const GO_CONFIG: VendorConfig = VendorConfig {
     script_template: GO_SCRIPT_TMPL,
     docker_tool: "docker-go",
     cache_dir: ".gomodcache",
+    cache_arg_name: "--go-mod-cache",
 };
 
 // Rust vendoring configuration
@@ -61,23 +63,26 @@ const RUST_SCRIPT_TMPL: &str = r#"#!/bin/bash
 
 set -e
 
-toplevel=$(tar tf __LOCAL_FILE_NAME__ | head -1)
-if [ -z __MOD_DIR__ ] ; then
+toplevel=$(tar tf "__LOCAL_FILE_NAME__" | head -1)
+if [ -z "__MOD_DIR__" ] ; then
     targetdir="${toplevel}"
 else
     targetdir="__MOD_DIR__"
 fi
 
-tar xf __LOCAL_FILE_NAME__
+tar xf "__LOCAL_FILE_NAME__"
 
 pushd "${targetdir}"
     mkdir -p .cargo
-    cargo vendor --locked > .cargo/config.toml
+    cargo metadata --locked --format-version 1 >/dev/null && cargo vendor --locked > .cargo/config.toml
+    if [ -f /deny.toml ]; then
+        cargo deny --config /deny.toml check --disable-fetch licenses bans sources
+    fi
 popd
 
-tar czf __OUTPUT__ -C "${targetdir}" vendor .cargo/config.toml
+tar czf "__OUTPUT__" -C "${targetdir}" vendor .cargo/config.toml
 rm -rf "${targetdir}"
-touch -r __LOCAL_FILE_NAME__ __OUTPUT__
+touch -r "__LOCAL_FILE_NAME__" "__OUTPUT__"
 "#;
 
 pub(crate) const RUST_CONFIG: VendorConfig = VendorConfig {
@@ -85,6 +90,7 @@ pub(crate) const RUST_CONFIG: VendorConfig = VendorConfig {
     script_template: RUST_SCRIPT_TMPL,
     docker_tool: "docker-cargo",
     cache_dir: ".cargo",
+    cache_arg_name: "--cargo-home",
 };
 
 pub(crate) struct VendorMod;
@@ -181,18 +187,12 @@ fn run_docker_tool(
     cache_dir: &Path,
     command: &str,
 ) -> Result<()> {
-    let cache_arg_name = match config.docker_tool {
-        "docker-go" => "--go-mod-cache",
-        "docker-cargo" => "--cargo-home",
-        _ => "--cache-dir",
-    };
-
     let mut args = vec![
         "--module-path",
         module_path.to_str().context(error::InputFileSnafu)?,
         "--sdk-image",
         sdk_image,
-        cache_arg_name,
+        config.cache_arg_name,
         cache_dir.to_str().context(error::InputFileSnafu)?,
     ];
 

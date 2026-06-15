@@ -25,7 +25,16 @@ members = [
     "tools/advisory-checker",
 
     "twoliter",
-    "twoliter/src/tool-crates/*",
+    "twoliter/src/tool-crates/advisory-checker",
+    "twoliter/src/tool-crates/buildsys",
+    "twoliter/src/tool-crates/embedded-bundle",
+    "twoliter/src/tool-crates/pcrsys",
+    "twoliter/src/tool-crates/pipesys",
+    "twoliter/src/tool-crates/pubsys",
+    "twoliter/src/tool-crates/pubsys-setup",
+    "twoliter/src/tool-crates/testsys",
+    "twoliter/src/tool-crates/tuftool",
+    "twoliter/src/tool-crates/unplug",
 
     "tests/integration-tests",
 ]
