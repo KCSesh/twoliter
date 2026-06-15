@@ -36,7 +36,6 @@ members = [
     "twoliter/src/tool-crates/testsys",
     "twoliter/src/tool-crates/tuftool",
     "twoliter/src/tool-crates/unplug",
-    "twoliter/src/tool-crates/eif-builder",
 
     "tests/integration-tests",
 ]
@@ -104,7 +103,6 @@ twoliter-tool-pubsys-setup = { version = "0.1", path = "twoliter/src/tool-crates
 twoliter-tool-testsys = { version = "0.1", path = "twoliter/src/tool-crates/testsys" }
 twoliter-tool-tuftool = { version = "0.1", path = "twoliter/src/tool-crates/tuftool" }
 twoliter-tool-unplug = { version = "0.1", path = "twoliter/src/tool-crates/unplug" }
-twoliter-tool-eif-builder = { version = "0.1", path = "twoliter/src/tool-crates/eif-builder" }
 
 unplug = { version = "0.1", path = "tools/unplug", artifact = [ "bin:unplug" ] }
 update-metadata = { version = "0.1", path = "tools/update-metadata" }

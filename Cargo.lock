@@ -5558,7 +5558,6 @@ dependencies = [
  "tracing",
  "twoliter-tool-advisory-checker",
  "twoliter-tool-buildsys",
- "twoliter-tool-eif-builder",
  "twoliter-tool-embedded-bundle",
  "twoliter-tool-pcrsys",
  "twoliter-tool-pipesys",
@@ -5585,14 +5584,6 @@ name = "twoliter-tool-buildsys"
 version = "0.1.0"
 dependencies = [
  "buildsys",
- "include-env-compressed",
-]
-
-[[package]]
-name = "twoliter-tool-eif-builder"
-version = "0.1.0"
-dependencies = [
- "eif-builder",
  "include-env-compressed",
 ]
 

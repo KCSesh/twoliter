@@ -37,8 +37,6 @@ fn main() {
     paths.copy_file("rpm2kmodkit");
     paths.copy_file("rpm2migrations");
     paths.copy_file("rpm2eif");
-    paths.copy_file("eif-init-x86_64");
-    paths.copy_file("nsm-x86_64.ko");
     paths.copy_file("metadata.spec");
     paths.copy_file("builder-group.spec");
     paths.copy_file("ocihelper");
