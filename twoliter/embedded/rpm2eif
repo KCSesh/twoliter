@@ -22,6 +22,12 @@ Required:
 
 Optional:
     --sbom-package-dir=DIR  Directory containing SBOM RPMs
+    --kernel-parameters=STR Additional kernel parameters from variant
+    --variant=STR           Variant name (for os-release VARIANT_ID)
+    --pretty-name=STR       Pretty name (for os-release PRETTY_NAME)
+    --project-vendor=STR    Vendor name (for os-release VENDOR_NAME)
+    --xfs-data-partition    Use XFS for data partition (default: ext4)
+    --encrypted-storage     Enable encrypted storage flag
 EOF
     exit 1
 }
@@ -35,6 +41,12 @@ for arg in "$@"; do
         --package-dir=*) PACKAGE_DIR="${arg#*=}" ;;
         --sbom-package-dir=*) SBOM_PACKAGE_DIR="${arg#*=}" ;;
         --output-dir=*) OUTPUT_DIR="${arg#*=}" ;;
+        --kernel-parameters=*) EXTRA_KERNEL_PARAMETERS="${arg#*=}" ;;
+        --variant=*) VARIANT="${arg#*=}" ;;
+        --pretty-name=*) PRETTY_NAME="${arg#*=}" ;;
+        --project-vendor=*) PROJECT_VENDOR="${arg#*=}" ;;
+        --xfs-data-partition*) XFS_DATA_PARTITION="yes" ;;
+        --encrypted-storage*) ENCRYPTED_STORAGE="yes" ;;
         *) echo "Unknown argument: ${arg}"; usage ;;
     esac
 done
@@ -42,6 +54,13 @@ done
 if [[ -z "${PACKAGE_DIR}" || -z "${OUTPUT_DIR}" ]]; then
     usage
 fi
+
+# Defaults for optional image configuration args
+: "${VARIANT:=${VARIANT_NAME:-unknown}}"
+: "${PRETTY_NAME:=Bottlerocket}"
+: "${PROJECT_VENDOR:=Bottlerocket}"
+: "${XFS_DATA_PARTITION:=no}"
+: "${ENCRYPTED_STORAGE:=no}"
 
 # Store output artifacts in a versioned directory.
 OUTPUT_DIR="${OUTPUT_DIR}/${VERSION_ID}-${BUILD_ID}"
@@ -57,6 +76,37 @@ rpm -iv --ignorearch --root "${INSTALL_ROOT}" \
 if [[ -n "${SBOM_PACKAGE_DIR}" ]] && ls "${SBOM_PACKAGE_DIR}"/*.rpm &>/dev/null; then
     rpm -iv --ignorearch --root "${INSTALL_ROOT}" \
         "${SBOM_PACKAGE_DIR}"/*.rpm
+fi
+
+echo "=== Configuring os-release and image-features ==="
+SYS_ROOT="${ARCH}-bottlerocket-linux-gnu/sys-root"
+VERSION="${VERSION_ID} (${VARIANT})"
+
+# Append variant and version metadata to os-release
+cat <<EOF >>"${INSTALL_ROOT}/${SYS_ROOT}/usr/lib/os-release"
+VERSION="${VERSION}"
+PRETTY_NAME="${PRETTY_NAME} ${VERSION}"
+VARIANT_ID=${VARIANT}
+VERSION_ID=${VERSION_ID}
+BUILD_ID=${BUILD_ID}
+VENDOR_NAME=${PROJECT_VENDOR}
+HOME_URL="https://github.com/bottlerocket-os/bottlerocket"
+SUPPORT_URL="https://github.com/bottlerocket-os/bottlerocket/discussions"
+BUG_REPORT_URL="https://github.com/bottlerocket-os/bottlerocket/issues"
+DOCUMENTATION_URL="https://bottlerocket.dev"
+EOF
+
+# Create image-features.env
+mkdir -p "${INSTALL_ROOT}/${SYS_ROOT}/usr/share/bottlerocket"
+if [[ "${XFS_DATA_PARTITION}" == "yes" ]]; then
+  printf "%s\n" "DATA_PARTITION_FILESYSTEM=xfs" >>"${INSTALL_ROOT}/${SYS_ROOT}/usr/share/bottlerocket/image-features.env"
+else
+  printf "%s\n" "DATA_PARTITION_FILESYSTEM=ext4" >>"${INSTALL_ROOT}/${SYS_ROOT}/usr/share/bottlerocket/image-features.env"
+fi
+if [[ "${ENCRYPTED_STORAGE}" == "yes" ]]; then
+  printf "%s\n" "ENCRYPTED_STORAGE=true" >>"${INSTALL_ROOT}/${SYS_ROOT}/usr/share/bottlerocket/image-features.env"
+else
+  printf "%s\n" "ENCRYPTED_STORAGE=false" >>"${INSTALL_ROOT}/${SYS_ROOT}/usr/share/bottlerocket/image-features.env"
 fi
 
 echo "=== Extracting kernel ==="
@@ -136,7 +186,7 @@ sgdisk -v "${DISK_TMP}"
 echo "=== Building EIF with dm-verity cmdline ==="
 # Build dm-verity kernel cmdline with /dev/vda1 and /dev/vda2
 DM_CREATE="dm-mod.create=\"root,,,ro,0 ${VERITY_DATA_SECTORS} verity 1 /dev/vda1 /dev/vda2 4096 4096 ${VERITY_DATA_BLOCKS} 1 sha256 ${VERITY_ROOT_HASH} ${VERITY_SALT} 2 restart_on_corruption ignore_zero_blocks\""
-KERNEL_CMDLINE="root=/dev/dm-0 ro rootwait console=ttyS0 initcall_blacklist=i8042_init ${DM_CREATE}"
+KERNEL_CMDLINE="${EXTRA_KERNEL_PARAMETERS:-console=ttyS0,115200n8} root=/dev/dm-0 ro rootwait initcall_blacklist=i8042_init ${DM_CREATE}"
 
 EIF_TMP="$(mktemp)"
 /host/build/tools/eif-builder \
