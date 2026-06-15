@@ -75,7 +75,7 @@ tar xf "__LOCAL_FILE_NAME__"
 pushd "${targetdir}"
     mkdir -p .cargo
     cargo metadata --locked --format-version 1 >/dev/null && cargo vendor --locked > .cargo/config.toml
-    cargo deny --config /deny.toml check --disable-fetch licenses bans sources
+    cargo deny check --config /deny.toml --disable-fetch licenses bans sources
 popd
 
 tar czf "__OUTPUT__" -C "${targetdir}" vendor .cargo/config.toml
